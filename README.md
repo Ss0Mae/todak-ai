@@ -1,3 +1,22 @@
+# todak-ai
+
+토닥 AI 서버 (FastAPI + LangChain + MongoDB). 원본: [Todak-Chatbot/AI](https://github.com/Todak-Chatbot/AI) (팀 레포, 2025-05 종료).
+이 레포는 그 포크이며 `main` 은 원본 그대로, 개선은 브랜치 `feature/async-streaming` 에 있다. 측정과 이야기는
+[todak-lab](https://github.com/Ss0Mae/todak-lab) `STORY.md`.
+
+## 포크에서 바꾼 것 (`feature/async-streaming`)
+
+| 문제 (원본) | 변경 |
+|---|---|
+| `async def` 핸들러 안에서 OpenAI·MongoDB·TTS 를 동기 호출 → 이벤트 루프가 막혀 **동시성 1** | 1단계: 블로킹 핸들러를 `def` 로 (스레드풀) · 2단계: `/start_chat` 을 AsyncOpenAI + `astream` 으로 비동기 네이티브화 |
+| 한 턴에 LLM 3회 직렬 (분석 → 상담사 → 주제 분류) | 주제 분류를 상담사 응답 생성과 병렬 실행 |
+| 응답이 끝나야 한 번에 반환 | `POST /start_chat/stream` SSE (`{"type":"delta"}` … `{"type":"done"}`). 모델 출력의 `상담사 응답:` 마커 뒤 첫 줄만 흘리는 필터는 기존 정규식과 같은 규칙 (`agents/reply_extractor.py`, `tests/`) |
+| 설정이 `conf.d/config.yaml` 파일에만 있어 컨테이너로 띄우기 어려움 | 파일 없으면 환경변수(`OPENAI_API_KEY`, `MONGODB_URI`, `CLOVA_*`) 폴백 |
+
+바꾸지 않은 것: 프롬프트·페르소나·분석 로직, 음성(`/voice_chat`)·리포트·인사 경로의 동기 구현(스레드풀에서만 돌게 함).
+
+---
+
 2025-1학기 세종대학교 캡스톤 "심리상담 서비스" AI파트  
 CapStone_Chat/  
 CapStone/  
