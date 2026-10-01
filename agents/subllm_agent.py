@@ -1,5 +1,5 @@
 from pathlib import Path
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 import os
 import re
 import json
@@ -16,8 +16,27 @@ class SubLLMAgent:
     def __init__(self, model="gpt-4o-mini"):
         api_key = get_config()["openai"]["key"]
         self.client = OpenAI(api_key=api_key)
+        self.aclient = _shared_async_client()  # 턴마다 새로 만들지 않는다 (아래 주석 참조)
         self.model = model
         self.prompt_template = load_prompt("subllm_prompt.txt")
+
+    def _analyze_request(self, user_input: str) -> dict:
+        prompt = self.prompt_template.format(text=user_input)
+        return dict(
+            model=self.model,
+            temperature=0.4,
+            max_tokens=1000,
+            messages=[
+                {"role": "system", "content": "너는 인지행동치료(CBT) 기반의 전문 심리상담 보조 LLM이야."},
+                {"role": "user", "content": prompt}
+            ],
+        )
+
+    async def analyze_async(self, user_input: str) -> dict:
+        """analyze()와 같은 요청을 이벤트 루프를 막지 않고 보낸다."""
+        response = await self.aclient.chat.completions.create(**self._analyze_request(user_input))
+        parsed = self._parse_llm_response(response.choices[0].message.content)
+        return {k.strip(): v.strip() for k, v in parsed.items()}
 
     def analyze(self, user_input: str) -> dict:
         # 분석용 프롬프트 구성
@@ -155,5 +174,53 @@ def classify_topic(user_input: str, model="gpt-4o-mini") -> str:
             {"role": "system", "content": "너는 전문 심리상담 분석가야. 주제만 정확히 선택해서 한 단어로 알려줘."},
             {"role": "user", "content": topic_prompt}
         ]
+    )
+    return response.choices[0].message.content.strip()
+
+
+def _topic_prompt(user_input: str) -> str:
+    return f"""
+    다음 사용자 발화를 읽고 아래 11개 주제 중 가장 관련 있는 하나를 골라 반환해줘.
+    오직 주제 이름만 한 단어로 출력해줘. 설명하지 마.
+    [주제 목록]
+	1.	학업/성적 스트레스
+	2.	직장/업무 스트레스
+	3.	진로/미래 불안
+	4.	대인관계/소통 어려움
+	5.	연애/이별
+	6.	가족 문제
+	7.	우울/무기력
+	8.	불안/긴장
+	9.	자기이해/성격 혼란
+	10.	생활습관/신체 문제
+	11.	기타
+    [사용자 발화]
+    {user_input}
+    """
+
+
+_async_client = None
+
+
+def _shared_async_client() -> AsyncOpenAI:
+    """프로세스당 하나만 쓴다. 호출마다 새 클라이언트를 만들면 httpx 커넥션 풀이 닫히지 않고 쌓여
+    동시 20명 부하에서 요청이 매달리는 현상이 났다 (todak-lab 2단계 VU20 실측)."""
+    global _async_client
+    if _async_client is None:
+        _async_client = AsyncOpenAI(api_key=get_config()["openai"]["key"])
+    return _async_client
+
+
+async def classify_topic_async(user_input: str, model="gpt-4o-mini") -> str:
+    """classify_topic()의 비동기 버전. 상담사 응답 생성과 병렬로 돌리기 위한 것."""
+    client = _shared_async_client()
+    response = await client.chat.completions.create(
+        model=model,
+        temperature=0.2,
+        max_tokens=30,
+        messages=[
+            {"role": "system", "content": "너는 전문 심리상담 분석가야. 주제만 정확히 선택해서 한 단어로 알려줘."},
+            {"role": "user", "content": _topic_prompt(user_input)}
+        ],
     )
     return response.choices[0].message.content.strip()
