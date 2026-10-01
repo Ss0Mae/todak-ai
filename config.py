@@ -30,9 +30,22 @@ def get_config():
         }
     }
 def load_config():
+    """conf.d/config.yaml 이 있으면 그것을, 없으면 환경변수로 같은 구조를 만든다.
+
+    로컬 재현(docker compose)에서 yaml 파일 없이 띄우기 위한 폴백이다.
+    """
     config_path = Path(__file__).parent / "conf.d" / "config.yaml"
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+    if config_path.exists():
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    return {
+        "openai": {"key": os.getenv("OPENAI_API_KEY", "")},
+        "mongodb": {"uri": os.getenv("MONGODB_URI", "mongodb://localhost:27017")},
+        "clova": {
+            "client_id": os.getenv("CLOVA_CLIENT_ID", ""),
+            "client_secret": os.getenv("CLOVA_CLIENT_SECRET", ""),
+        },
+    }
 
 def set_openai_api_key():
     config = load_config()
