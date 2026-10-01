@@ -6,7 +6,9 @@ class ReplyExtractor:
 
     마커가 끝까지 안 나오면 finish()가 전체 텍스트를 돌려준다 (원 정규식의 폴백과 같은 동작).
     """
-    MARK = re.compile(r"상담사\s*응답[:：]?\s*")
+    MARK = re.compile(r"상담사\s*응답")
+    # 마커 뒤에 오는 콜론·공백·개행·마크다운 별표. 실제 모델은 "상담사 응답:  \n본문" 처럼 낸다
+    SKIP = re.compile(r"^[\s:：*]+")
 
     def __init__(self):
         self.buf = ""
@@ -22,8 +24,13 @@ class ReplyExtractor:
             m = self.MARK.search(self.buf)
             if not m:
                 return ""
+            rest = self.SKIP.sub("", self.buf[m.end():])
+            if not rest:
+                # 마커 뒤에 콜론/공백/개행만 있고 본문 첫 글자가 아직 안 왔다 — 청크 경계에서 ":" 를
+                # 본문으로 흘리지 않도록 기다린다 (실제 모델 실측에서 응답이 ":" 한 글자가 되던 버그)
+                return ""
             self.started = True
-            self.buf = self.buf[m.end():]
+            self.buf = rest
         out, self.buf = self.buf, ""
         if self._lead:
             out = out.lstrip()

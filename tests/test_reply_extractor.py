@@ -22,6 +22,15 @@ def test_no_marker_falls_back_to_whole_text():
     assert run(["그냥 ", "본문만 왔다 "]) == "그냥 본문만 왔다"
 
 
+def test_colon_and_newline_arrive_after_marker_in_later_chunks():
+    # 실제 gpt-4o-mini 출력: "상담사 응답:  \n본문" 이 청크 "상담사 응답" / ":" / "  \n요즘…" 으로 쪼개져 온다
+    assert run(["상담사 응답", ":", "  \n요즘 힘들지.", "\n분석: 슬픔"]) == "요즘 힘들지."
+
+
+def test_markdown_bold_marker():
+    assert run(["**상담사 응답**: 괜찮아.\n"]) == "괜찮아."
+
+
 def test_nothing_after_done():
     ex = ReplyExtractor()
     ex.feed("상담사 응답: 끝\n")
