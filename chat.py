@@ -10,7 +10,8 @@ from fastapi import FastAPI, HTTPException
 import requests
 from datetime import datetime, timedelta, timezone
 import os
-from agents.subllm_agent import classify_topic # 새로 만든 함수가 있는 파일에서 import
+import asyncio
+from agents.subllm_agent import classify_topic, classify_topic_async # 새로 만든 함수가 있는 파일에서 import
 
 # API 키 설정
 set_openai_api_key()
@@ -72,6 +73,49 @@ class TherapySimulation:
             "reply": reply,
             "emotion": analysis.get("감정", "없음")
         }
+
+    async def stream_turn(self, message: str):
+        """run_single_turn의 스트리밍 판. 주제 분류는 응답 생성과 병렬로 돈다.
+
+        {"type":"delta","content":...} 를 흘리고 마지막에 {"type":"done","reply":...,"emotion":...} 를 낸다.
+        저장(MongoDB)은 응답이 끝까지 생성된 뒤에만 한다 — 중간에 끊긴 턴은 남기지 않는다.
+        """
+        topic_task = asyncio.create_task(classify_topic_async(message))
+        analysis = {}
+        parts = []
+        async for kind, payload in self.counselor_agent.stream_response(self.history, message):
+            if kind == "analysis":
+                analysis = payload
+            else:
+                parts.append(payload)
+                yield {"type": "delta", "content": payload}
+        reply = "".join(parts).strip()
+        topic_result = await topic_task
+        user_entry = {
+            "role": "client",
+            "message": message,
+            "timestamp": datetime.now().isoformat(),
+            "analysis": analysis,
+            "topic": topic_result
+        }
+        bot_entry = {
+            "role": "counselor",
+            "message": reply,
+            "timestamp": datetime.now(kst).isoformat(),
+            "persona": self.persona
+        }
+        self.history.extend([user_entry, bot_entry])
+        await asyncio.to_thread(save_chat_log, self.userId, self.chatId, user_entry, bot_entry)
+        yield {"type": "done", "reply": reply, "emotion": analysis.get("감정", "없음")}
+
+
+async def stream_response_from_input(persona: str, chatId: int, userId: int, name: str, age: int,
+                                     gender: str, message: str):
+    # 생성자가 MongoDB를 동기로 읽으므로 스레드로 뺀다
+    sim = await asyncio.to_thread(TherapySimulation, persona, chatId, userId, name, age, gender)
+    async for event in sim.stream_turn(message):
+        yield event
+
 
 def generate_response_from_input(persona: str, chatId: int, userId: int, name: str, age: int, 
                                  gender: str, message: str):

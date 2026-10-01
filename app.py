@@ -1,7 +1,9 @@
 import json
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from chat import generate_response_from_input
+import asyncio
+from chat import generate_response_from_input, stream_response_from_input
+from fastapi.responses import StreamingResponse
 from DB import save_user_info, get_user_info, get_chat_log, save_analysis_report
 from starter.generate_greet import generate_greet, load_prompt
 from typing import Optional
@@ -46,20 +48,13 @@ class ChatRequest(BaseModel):
     age: int 
     gender: str 
 
-@app.post("/start_chat")
-async def start_chat_endpoint(request: ChatRequest):
-    user_info = get_user_info(request.userId)
-
-    if not user_info:
+def _ensure_user_info(request: ChatRequest):
+    if not get_user_info(request.userId):
         save_user_info(request.userId, request.name, request.age, request.gender)
 
-    chat_log = get_chat_log(request.chatId) or []
-    history = []
 
-    if chat_log and isinstance(chat_log, list) and isinstance(chat_log[0], dict) and 'role' in chat_log[0]:
-        history = chat_log
-
-    botResponse = generate_response_from_input(
+def _turn_events(request: ChatRequest):
+    return stream_response_from_input(
         persona=request.persona,
         chatId=request.chatId,
         userId=request.userId,
@@ -69,15 +64,41 @@ async def start_chat_endpoint(request: ChatRequest):
         gender=request.gender,
     )
 
+
+@app.post("/start_chat")
+async def start_chat_endpoint(request: ChatRequest):
+    """한 턴을 끝까지 생성해 한 번에 돌려준다 (비스트리밍 호환 엔드포인트)."""
+    await asyncio.to_thread(_ensure_user_info, request)
+    reply = ""
+    async for event in _turn_events(request):
+        if event["type"] == "done":
+            reply = event["reply"]
     return {
         "userId" : request.userId,
         "chatId" : request.chatId,
-        "botResponse": botResponse["reply"],
+        "botResponse": reply,
         "timestamp": datetime.now(kst).isoformat()
     }
 
+
+@app.post("/start_chat/stream")
+async def start_chat_stream_endpoint(request: ChatRequest):
+    """같은 턴을 SSE로 흘린다. data: {"type":"delta"|"done", ...} 줄 단위."""
+    await asyncio.to_thread(_ensure_user_info, request)
+
+    async def gen():
+        async for event in _turn_events(request):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/get_chat_log/{chatId}")
-async def get_chat_log_endpoint(chatId: int):
+def get_chat_log_endpoint(chatId: int):
     chat_log = get_chat_log(int(chatId))
 
     if not chat_log:
@@ -100,7 +121,7 @@ class GreetRequest(BaseModel):
     
 from starter.generate_greet import run_generate_greet
 @app.post("/generate_greet")
-async def generate_greet_endpoint(request: GreetRequest):
+def generate_greet_endpoint(request: GreetRequest):
     return run_generate_greet(request.userId, request.chatId, request.name, request.age, request.gender)
 
 @app.get("/docs")
@@ -120,7 +141,7 @@ class VoiceChatRequest(BaseModel):
     gender: str
 
 @app.post("/voice_chat")
-async def voice_chat(request: VoiceChatRequest):
+def voice_chat(request: VoiceChatRequest):
 
     # 3. GPT 응답 생성 (공통 로직 재사용)
     from chat import generate_response_from_input
@@ -160,7 +181,7 @@ class ReportRequest(BaseModel):
     chatId: int
 
 @app.post("/generate_report")
-async def generate_report_post(request: ReportRequest):
+def generate_report_post(request: ReportRequest):
     try:
         print("🚀 Report 요청:", request.chatId, request.userId)
 
